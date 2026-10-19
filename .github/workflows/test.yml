@@ -25,6 +25,45 @@ jobs:
         version: latest
     - name: Install
       run: pnpm install --frozen-lockfile
+    - name: Verify lockfile is unchanged by install
+      run: git diff --exit-code pnpm-lock.yaml
+    - name: Verify workspace packages match lockfile importers
+      run: |
+        set -euo pipefail
+        node -e '
+          const fs = require("fs");
+          const path = require("path");
+          const yaml = require("yaml");
+          const lock = yaml.parse(fs.readFileSync("pnpm-lock.yaml", "utf8"));
+          const importers = lock.importers || {};
+          const globs = ["packages", "apps"];
+          const errors = [];
+          for (const base of globs) {
+            if (!fs.existsSync(base)) continue;
+            for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+              if (!entry.isDirectory()) continue;
+              const dir = path.join(base, entry.name);
+              const pkgPath = path.join(dir, "package.json");
+              if (!fs.existsSync(pkgPath)) {
+                errors.push(`${dir}: missing package.json (matched by workspace glob "${base}/*")`);
+                continue;
+              }
+              const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+              if (!pkg.name) {
+                errors.push(`${pkgPath}: missing "name" field`);
+                continue;
+              }
+              if (!importers[dir]) {
+                errors.push(`${pkgPath}: package "${pkg.name}" has no importer entry "${dir}" in pnpm-lock.yaml`);
+              }
+            }
+          }
+          if (errors.length) {
+            console.error("Workspace/lockfile consistency check failed:");
+            for (const e of errors) console.error("  - " + e);
+            process.exit(1);
+          }
+        '
     - name: Build shared (consumed by web + listener)
       run: pnpm --filter @slippay/shared build
     - name: Lint
