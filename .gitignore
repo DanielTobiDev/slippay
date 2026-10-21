@@ -11,10 +11,6 @@ supabase/.temp
 # Env files — NEVER commit (audit L4). VITE_-prefixed values get inlined into
 # the world-readable bundle, and server .env holds secrets. Ignore all .env*
 # everywhere, but keep *.example templates tracked.
-.env
-.env.*
-**/.env
-**/.env.*
 !.env.example
 !.env.*.example
 !**/.env.example
@@ -54,3 +50,4 @@ temp_interactive_push.bat
 __pycache__/
 *.py[cod]
 *$py.class
+config.bat
