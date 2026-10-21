@@ -25,45 +25,61 @@ jobs:
         version: latest
     - name: Install
       run: pnpm install --frozen-lockfile
-    - name: Verify lockfile is unchanged by install
-      run: git diff --exit-code pnpm-lock.yaml
+    - name: Verify lockfile is unchanged after install
+      run: |
+        if ! git diff --exit-code -- pnpm-lock.yaml; then
+          echo "::error file=pnpm-lock.yaml::pnpm-lock.yaml was modified during install. Run 'pnpm install' locally and commit the updated lockfile."
+          exit 1
+        fi
     - name: Verify workspace packages match lockfile importers
       run: |
-        set -euo pipefail
-        node -e '
-          const fs = require("fs");
-          const path = require("path");
-          const yaml = require("yaml");
-          const lock = yaml.parse(fs.readFileSync("pnpm-lock.yaml", "utf8"));
-          const importers = lock.importers || {};
-          const globs = ["packages", "apps"];
-          const errors = [];
-          for (const base of globs) {
-            if (!fs.existsSync(base)) continue;
-            for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
-              if (!entry.isDirectory()) continue;
-              const dir = path.join(base, entry.name);
-              const pkgPath = path.join(dir, "package.json");
-              if (!fs.existsSync(pkgPath)) {
-                errors.push(`${dir}: missing package.json (matched by workspace glob "${base}/*")`);
-                continue;
-              }
-              const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-              if (!pkg.name) {
-                errors.push(`${pkgPath}: missing "name" field`);
-                continue;
-              }
-              if (!importers[dir]) {
-                errors.push(`${pkgPath}: package "${pkg.name}" has no importer entry "${dir}" in pnpm-lock.yaml`);
-              }
+        node --input-type=commonjs - <<'EOF'
+        const fs = require('fs');
+        const path = require('path');
+        const workspace = fs.readFileSync('pnpm-workspace.yaml', 'utf8');
+        const globs = [];
+        for (const line of workspace.split('\n')) {
+          const m = line.match(/^\s*-\s*['"]?([^'"#]+?)['"]?\s*$/);
+          if (m) globs.push(m[1]);
+        }
+        const lock = fs.readFileSync('pnpm-lock.yaml', 'utf8');
+        const importers = new Set();
+        let inImporters = false;
+        for (const line of lock.split('\n')) {
+          if (/^importers:\s*$/.test(line)) { inImporters = true; continue; }
+          if (inImporters) {
+            if (/^\S/.test(line)) { inImporters = false; continue; }
+            const m = line.match(/^  (\S.*?):\s*$/);
+            if (m) importers.add(m[1].replace(/^['"]|['"]$/g, ''));
+          }
+        }
+        const errors = [];
+        for (const glob of globs) {
+          const base = glob.replace(/\/\*$/, '');
+          if (!fs.existsSync(base) || !fs.statSync(base).isDirectory()) continue;
+          for (const entry of fs.readdirSync(base)) {
+            const dir = path.join(base, entry);
+            if (!fs.statSync(dir).isDirectory()) continue;
+            const pkgPath = path.join(dir, 'package.json');
+            if (!fs.existsSync(pkgPath)) {
+              errors.push(`${dir} matches workspace glob '${glob}' but has no package.json`);
+              continue;
+            }
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+            if (!pkg.name) {
+              errors.push(`${pkgPath} is missing a "name" field`);
+              continue;
+            }
+            if (!importers.has(dir)) {
+              errors.push(`${pkgPath} (name: ${pkg.name}) has no matching importer '${dir}' in pnpm-lock.yaml`);
             }
           }
-          if (errors.length) {
-            console.error("Workspace/lockfile consistency check failed:");
-            for (const e of errors) console.error("  - " + e);
-            process.exit(1);
-          }
-        '
+        }
+        if (errors.length) {
+          for (const e of errors) console.error(`::error file=pnpm-lock.yaml::${e}`);
+          process.exit(1);
+        }
+        EOF
     - name: Build shared (consumed by web + listener)
       run: pnpm --filter @slippay/shared build
     - name: Lint
