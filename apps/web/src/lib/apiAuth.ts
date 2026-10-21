@@ -6,12 +6,10 @@ export async function authFetch(path: string, init: RequestInit = {}): Promise<R
   const { data } = await supabase.auth.getSession();
   const jwt = data.session?.access_token;
   // Normalise through the Headers API so objects, Headers instances, and
-  // array-of-pairs inputs all merge identically. Spreading only works for
-  // plain objects and silently drops everything else.
+  // array-of-pairs all merge identically. Object spreading dropped Headers
+  // instances entirely.
   const headers = new Headers(init.headers);
-  // The session token always wins over a caller-supplied authorization
-  // header, so a stale or forged token cannot override the authenticated
-  // session.
+  // A session token always wins over a caller-supplied authorization header.
   if (jwt) headers.set("authorization", `Bearer ${jwt}`);
   return fetch(`${API_BASE}${path}`, {
     ...init,

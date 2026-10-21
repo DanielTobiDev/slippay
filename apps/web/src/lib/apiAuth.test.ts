@@ -25,8 +25,8 @@ describe("authFetch", () => {
   });
 
   it("attaches the Supabase access token as a bearer header", async () => {
-    getSession.mockResolvedValue(sessionWith("jwt-123"));
-    const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+    getSession.mockResolved(sessionWith("jwt-123"));
+    const fetchMock = vi.fn().mockResolved(new Response("{}", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
     await authFetch("/orders");
@@ -38,8 +38,8 @@ describe("authFetch", () => {
   });
 
   it("omits the bearer header when there is no active session", async () => {
-    getSession.mockResolvedValue({ data: { session: null } });
-    const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+    getSession.mockResolved({ data: { session: null } });
+    const fetchMock = vi.fn().mockResolved(new Response("{}", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
     await authFetch("/public");
@@ -50,8 +50,8 @@ describe("authFetch", () => {
   });
 
   it("surfaces a 401 response without retrying (single attempt, no loop)", async () => {
-    getSession.mockResolvedValue(sessionWith("expired-jwt"));
-    const fetchMock = vi.fn().mockResolvedValue(new Response("nope", { status: 401 }));
+    getSession.mockResolved(sessionWith("expired-jwt"));
+    const fetchMock = vi.fn().mockResolved(new Response("nope", { status: 401 }));
     vi.stubGlobal("fetch", fetchMock);
 
     const res = await authFetch("/orders");
@@ -62,8 +62,8 @@ describe("authFetch", () => {
   });
 
   it("merges caller headers and forwards the request init", async () => {
-    getSession.mockResolvedValue(sessionWith("jwt-abc"));
-    const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+    getSession.mockResolved(sessionWith("jwt-abc"));
+    const fetchMock = vi.fn().mockResolved(new Response("{}", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
     await authFetch("/pay", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
@@ -76,25 +76,27 @@ describe("authFetch", () => {
   });
 
   it("preserves a caller-supplied Headers instance", async () => {
-    getSession.mockResolvedValue(sessionWith("jwt-headers"));
-    const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+    getSession.mockResolved(sessionWith("jwt-headers"));
+    const fetchMock = vi.fn().mockResolved(new Response("{}", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const callerHeaders = new Headers();
-    callerHeaders.set("content-type", "application/json");
-    callerHeaders.set("idempotency-key", "key-123");
+    const callerHeaders = new Headers({
+      "content-type": "application/json",
+      "idempotency-key": "key-123",
+    });
 
     await authFetch("/pay", { method: "POST", headers: callerHeaders, body: "{}" });
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(headersOf(init).get("content-type")).toBe("application/json");
-    expect(headersOf(init).get("idempotency-key")).toBe("key-123");
-    expect(headersOf(init).get("authorization")).toBe("Bearer jwt-headers");
+    const headers = headersOf(init);
+    expect(headers.get("content-type")).toBe("application/json");
+    expect(headers.get("idempotency-key")).toBe("key-123");
+    expect(headers.get("authorization")).toBe("Bearer jwt-headers");
   });
 
   it("preserves an array-of-pairs headers input", async () => {
-    getSession.mockResolvedValue(sessionWith("jwt-pairs"));
-    const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+    getSession.mockResolved(sessionWith("jwt-pairs"));
+    const fetchMock = vi.fn().mockResolved(new Response("{}", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
     await authFetch("/pay", {
@@ -107,14 +109,53 @@ describe("authFetch", () => {
     });
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(headersOf(init).get("content-type")).toBe("application/json");
-    expect(headersOf(init).get("idempotency-key")).toBe("key-456");
-    expect(headersOf(init).get("authorization")).toBe("Bearer jwt-pairs");
+    const headers = headersOf(init);
+    expect(headers.get("content-type")).toBe("application/json");
+    expect(headers.get("idempotency-key")).toBe("key-456");
+    expect(headers.get("authorization")).toBe("Bearer jwt-pairs");
+  });
+
+  it("treats all three header input forms identically", async () => {
+    getSession.mockResolved(sessionWith("jwt-equal"));
+    const fetchMock = vi.fn.mockResolved(new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const entries: [string, string][] = [
+      ["content-type", "application/json"],
+      ["idempotency-key", "key-equal"],
+    ];
+    const inputs: RequestInit["headers"][] = [
+      Object.fromEntries(entries),
+      new Headers(entries),
+      entries,
+    ];
+
+    for (const headers of inputs) {
+      await authFetch("/pay", { method: "POST", headers, body: "{}" });
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(inputs.length);
+    const seen = fetchMock.mock.calls.map(([, init]) => {
+      const h = headersOf(init as RequestInit);
+      return {
+        contentType: h.get("content-type"),
+        idempotencyKey: h.get("idempotency-key"),
+        authorization: h.get("authorization"),
+      };
+    });
+    for (const result of seen) {
+      expect(result).equals(seen[0]);
+    }
+    expect(seen[0]).equals({
+      contentType: "application/json",
+      idempotencyKey: "key-equal",
+      authorization: "Bearer jwt-equal",
+    });
   });
 
   it("propagates a network rejection instead of swallowing it", async () => {
-    getSession.mockResolvedValue(sessionWith("jwt"));
-    const fetchMock = vi.fn().mockRejectedValue(new Error("network down"));
+    getSession.mockResolved(sessionWith("jwt"));
+    const fetchMock = vi.fn().mockRejected(new Error("network down"));
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(authFetch("/orders")).rejects.toThrow("network down");
@@ -122,7 +163,7 @@ describe("authFetch", () => {
   });
 
   it("propagates a session-refresh failure and does not send the request", async () => {
-    getSession.mockRejectedValue(new Error("refresh failed"));
+    getSession.mockRejected(new Error("refresh failed"));
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
